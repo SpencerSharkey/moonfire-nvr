@@ -168,4 +168,15 @@ export default class StreamView {
   set onRecordingClicked(h) {
     this.recordingsView.onRecordingClicked = h;
   }
+
+    /**
+   * Set a handler for clicks on a recording.
+   *
+   * The handler will be called with one argument, the recording model.
+   *
+   * @param  {Function} h Handler function
+   */
+  set onLiveClicked(h) {
+    this.recordingsView.onLiveClicked = h;
+  }
 }

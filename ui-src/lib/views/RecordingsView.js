@@ -90,6 +90,7 @@ export default class RecordingsView {
     this.recordings_ = null;
     this.recordingsRange_ = null;
     this.clickHandler_ = null;
+    this.liveClickHandler_ = null;
     if (parent) {
       parent.append(this.element_);
     }
@@ -106,9 +107,19 @@ export default class RecordingsView {
    */
   createElement_(id, cameraName, streamType) {
     const tab = $('<tbody>').attr('id', id);
+
+    const liveButton = $('<button style="font-size: 12px; padding: 0px 3px; margin: 1px; 2px;">').text('LIVE');
+    liveButton.on('click', () => {
+        console.log('Live video clicked');
+        if (this.liveClickHandler_ !== null) {
+          console.log('Live video clicked handler call');
+          this.liveClickHandler_();
+        }
+      });
+
     tab.append(
         $('<tr class="name">').append($('<th colspan=6/>')
-            .text(cameraName + ' ' + streamType)),
+            .text(cameraName + ' ' + streamType).append(liveButton)),
         $('<tr class="hdr">').append(
             $(
                 _columnOrder
@@ -250,6 +261,17 @@ export default class RecordingsView {
    */
   set onRecordingClicked(h) {
     this.clickHandler_ = h;
+  }
+
+    /**
+   * Set a handler to receive clicks on a recording.
+   *
+   * The handler will be called with one argument: a recording model.
+   *
+   * @param  {Function} h Handler to be called.
+   */
+  set onLiveClicked(h) {
+    this.liveClickHandler_ = h;
   }
 
   /**

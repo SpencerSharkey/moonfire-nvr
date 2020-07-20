@@ -54,6 +54,7 @@ import 'jquery-ui/ui/widgets/tooltip';
 import Camera from './lib/models/Camera';
 import CalendarView from './lib/views/CalendarView';
 import VideoDialogView from './lib/views/VideoDialogView';
+import LiveDialogView from './lib/views/LiveDialogView';
 import NVRSettingsView from './lib/views/NVRSettingsView';
 import RecordingFormatter from './lib/support/RecordingFormatter';
 import StreamSelectorView from './lib/views/StreamSelectorView';
@@ -152,6 +153,33 @@ function onSelectVideo(nvrSettingsView, camera, streamType, range, recording) {
       .attach($('body'))
       .play(videoTitle, width, url);
 }
+
+/**
+ * Event handler for clicking on a live stream
+ *
+ * A 'dialog' object is attached to the body of the dom and it
+ * properly initialized with the corrcet src url.
+ *
+ * @param  {NVRSettings} nvrSettingsView NVRSettingsView in effect
+ * @param  {object} camera Object for the camera
+ * @param  {String} streamType "main" or "sub"
+ * @param  {object} range Range Object
+ * @param  {object} recording Recording object
+ * @return {void}
+ */
+function onSelectLiveVideo(nvrSettingsView, camera, streamType, range, recording) {
+    console.log('Recording clicked: ', recording);
+    const url = api.streamUrl(
+        camera.uuid,
+        streamType
+    );
+    const videoTitle = camera.shortName + ' LIVE'
+    const maxWidth = window.innerWidth / 2;
+    let width = maxWidth;
+    new LiveDialogView()
+        .attach($('body'))
+        .play(videoTitle, width, url);
+  }
 
 /**
  * Fetch stream view data for a given date/time range.
@@ -298,6 +326,14 @@ function onReceivedTopLevel(data) {
             streamType,
             calendarView.selectedRange,
             recordingModel
+        );
+      };
+      sv.onLiveClicked = () => {
+        console.log('Live clicked');
+        onSelectLiveVideo(
+            nvrSettingsView,
+            camera,
+            streamType,
         );
       };
       streamViews.push(sv);

@@ -143,6 +143,30 @@ export default class MoonfireAPI {
   }
 
   /**
+   * Returns the URL for live websocket stream
+   *
+   * @param {String} cameraUUID
+   * @param {String} streamType
+   * @return {String}
+   */
+  streamUrl(cameraUUID, streamType) {
+    const path = this.builder_.makeUrl('cameras/' + cameraUUID + '/' + streamType + '/live.m4s');
+    const proto = (window.location.protocol === "https:") ? "wss://" : "ws://";
+    return `${proto}${window.location.host}${path}`;
+  }
+
+  /**
+   * Returns the URL for a stream's initial segment data
+   *
+   * @param {String} segmentId
+   * @return {String}
+   */
+  initUrl(segmentId) {
+    return this.builder_.makeUrl('init/' + segmentId + '.mp4');
+  }
+
+
+  /**
    * Start a new AJAX request with the specified URL.
    *
    * @param  {String} url     URL to use
