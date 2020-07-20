@@ -30,7 +30,7 @@
 
 use crate::h264;
 use cstr::*;
-use failure::{Error, bail};
+use failure::{bail, Error};
 use ffmpeg;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
@@ -49,13 +49,10 @@ pub enum Source<'a> {
     File(&'a str),
 
     /// An RTSP stream, for production use.
-    Rtsp {
-        url: &'a str,
-        redacted_url: &'a str
-    },
+    Rtsp { url: &'a str, redacted_url: &'a str },
 }
 
-pub trait Opener<S : Stream> : Sync {
+pub trait Opener<S: Stream>: Sync {
     fn open(&self, src: Source) -> Result<S, Error>;
 }
 
@@ -73,7 +70,7 @@ impl Ffmpeg {
             //ffmpeg::init().unwrap();
             //ffmpeg::format::network::init();
         });
-        Ffmpeg{}
+        Ffmpeg {}
     }
 }
 
@@ -86,34 +83,50 @@ impl Opener<FfmpegStream> for Ffmpeg {
                 let mut open_options = ffmpeg::Dictionary::new();
 
                 // Work around https://github.com/scottlamb/moonfire-nvr/issues/10
-                open_options.set(cstr!("advanced_editlist"), cstr!("false")).unwrap();
+                open_options
+                    .set(cstr!("advanced_editlist"), cstr!("false"))
+                    .unwrap();
                 let url = format!("file:{}", filename);
-                let i = InputFormatContext::open(&CString::new(url.clone()).unwrap(),
-                                                 &mut open_options)?;
+                let i = InputFormatContext::open(
+                    &CString::new(url.clone()).unwrap(),
+                    &mut open_options,
+                )?;
                 if !open_options.empty() {
-                    warn!("While opening URL {}, some options were not understood: {}",
-                          url, open_options);
+                    warn!(
+                        "While opening URL {}, some options were not understood: {}",
+                        url, open_options
+                    );
                 }
                 (i, false)
             }
-            Source::Rtsp{url, redacted_url} => {
+            Source::Rtsp { url, redacted_url } => {
                 let mut open_options = ffmpeg::Dictionary::new();
-                open_options.set(cstr!("rtsp_transport"), cstr!("tcp")).unwrap();
-                open_options.set(cstr!("user-agent"), cstr!("moonfire-nvr")).unwrap();
+                open_options
+                    .set(cstr!("rtsp_transport"), cstr!("tcp"))
+                    .unwrap();
+                open_options
+                    .set(cstr!("user-agent"), cstr!("moonfire-nvr"))
+                    .unwrap();
                 // 10-second socket timeout, in microseconds.
-                open_options.set(cstr!("stimeout"), cstr!("10000000")).unwrap();
+                open_options
+                    .set(cstr!("stimeout"), cstr!("10000000"))
+                    .unwrap();
 
                 // Moonfire NVR currently only supports video, so receiving audio is wasteful.
                 // It also triggers <https://github.com/scottlamb/moonfire-nvr/issues/36>.
-                open_options.set(cstr!("allowed_media_types"), cstr!("video")).unwrap();
+                open_options
+                    .set(cstr!("allowed_media_types"), cstr!("video"))
+                    .unwrap();
 
                 let i = InputFormatContext::open(&CString::new(url).unwrap(), &mut open_options)?;
                 if !open_options.empty() {
-                    warn!("While opening URL {}, some options were not understood: {}",
-                          redacted_url, open_options);
+                    warn!(
+                        "While opening URL {}, some options were not understood: {}",
+                        redacted_url, open_options
+                    );
                 }
                 (i, true)
-            },
+            }
         };
 
         input.find_stream_info()?;
@@ -122,7 +135,7 @@ impl Opener<FfmpegStream> for Ffmpeg {
         let mut video_i = None;
         {
             let s = input.streams();
-            for i in 0 .. s.len() {
+            for i in 0..s.len() {
                 if s.get(i).codecpar().codec_type().is_video() {
                     debug!("Video stream index is {}", i);
                     video_i = Some(i);
@@ -135,10 +148,7 @@ impl Opener<FfmpegStream> for Ffmpeg {
             None => bail!("no video stream"),
         };
 
-        let mut stream = FfmpegStream{
-            input,
-            video_i,
-        };
+        let mut stream = FfmpegStream { input, video_i };
 
         if discard_first {
             info!("Discarding the first packet to work around https://trac.ffmpeg.org/ticket/5018");
@@ -159,14 +169,22 @@ impl Stream for FfmpegStream {
         let video = self.input.streams().get(self.video_i);
         let tb = video.time_base();
         if tb.num != 1 || tb.den != 90000 {
-            bail!("video stream has timebase {}/{}; expected 1/90000", tb.num, tb.den);
+            bail!(
+                "video stream has timebase {}/{}; expected 1/90000",
+                tb.num,
+                tb.den
+            );
         }
         let codec = video.codecpar();
         let codec_id = codec.codec_id();
         if !codec_id.is_h264() {
             bail!("stream's video codec {:?} is not h264", codec_id);
         }
-        h264::ExtraData::parse(codec.extradata(), codec.width() as u16, codec.height() as u16)
+        h264::ExtraData::parse(
+            codec.extradata(),
+            codec.width() as u16,
+            codec.height() as u16,
+        )
     }
 
     fn get_next<'i>(&'i mut self) -> Result<ffmpeg::Packet<'i>, ffmpeg::Error> {

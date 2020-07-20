@@ -36,8 +36,8 @@ use std::path::Path;
 
 pub mod check;
 pub mod config;
-pub mod login;
 pub mod init;
+pub mod login;
 pub mod run;
 pub mod sql;
 pub mod ts;
@@ -47,7 +47,7 @@ pub mod upgrade;
 enum OpenMode {
     ReadOnly,
     ReadWrite,
-    Create
+    Create,
 }
 
 /// Locks the directory without opening the database.
@@ -55,9 +55,18 @@ enum OpenMode {
 fn open_dir(db_dir: &Path, mode: OpenMode) -> Result<dir::Fd, Error> {
     let dir = dir::Fd::open(db_dir, mode == OpenMode::Create)?;
     let ro = mode == OpenMode::ReadOnly;
-    dir.lock(if ro { FlockArg::LockSharedNonblock } else { FlockArg::LockExclusiveNonblock })
-       .map_err(|e| e.context(format!("db dir {:?} already in use; can't get {} lock",
-                                      db_dir, if ro { "shared" } else { "exclusive" })))?;
+    dir.lock(if ro {
+        FlockArg::LockSharedNonblock
+    } else {
+        FlockArg::LockExclusiveNonblock
+    })
+    .map_err(|e| {
+        e.context(format!(
+            "db dir {:?} already in use; can't get {} lock",
+            db_dir,
+            if ro { "shared" } else { "exclusive" }
+        ))
+    })?;
     Ok(dir)
 }
 
@@ -76,6 +85,7 @@ fn open_conn(db_dir: &Path, mode: OpenMode) -> Result<(dir::Fd, rusqlite::Connec
         } |
         // rusqlite::Connection is not Sync, so there's no reason to tell SQLite3 to use the
         // serialized threading mode.
-        rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     Ok((dir, conn))
 }

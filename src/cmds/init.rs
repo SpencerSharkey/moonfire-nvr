@@ -30,14 +30,18 @@
 
 use failure::Error;
 use log::info;
-use structopt::StructOpt;
 use std::path::PathBuf;
+use structopt::StructOpt;
 
 #[derive(StructOpt)]
 pub struct Args {
     /// Directory holding the SQLite3 index database.
-    #[structopt(long, default_value = "/var/lib/moonfire-nvr/db", value_name="path",
-                parse(from_os_str))]
+    #[structopt(
+        long,
+        default_value = "/var/lib/moonfire-nvr/db",
+        value_name = "path",
+        parse(from_os_str)
+    )]
     db_dir: PathBuf,
 }
 
@@ -51,10 +55,12 @@ pub fn run(args: &Args) -> Result<(), Error> {
         return Ok(());
     }
 
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         pragma journal_mode = wal;
         pragma page_size = 16384;
-    "#)?;
+    "#,
+    )?;
     db::init(&mut conn)?;
     info!("Database initialized.");
     Ok(())

@@ -28,7 +28,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#![cfg_attr(all(feature="nightly", test), feature(test))]
+#![cfg_attr(all(feature = "nightly", test), feature(test))]
 
 use log::{error, info};
 use std::str::FromStr;
@@ -45,7 +45,10 @@ mod streamer;
 mod web;
 
 #[derive(StructOpt)]
-#[structopt(name="moonfire-nvr", about="security camera network video recorder")]
+#[structopt(
+    name = "moonfire-nvr",
+    about = "security camera network video recorder"
+)]
 enum Args {
     /// Checks database integrity (like fsck).
     Check(cmds::check::Args),
@@ -97,15 +100,20 @@ impl Args {
 fn main() {
     let args = Args::from_args();
     let mut h = mylog::Builder::new()
-        .set_format(::std::env::var("MOONFIRE_FORMAT")
-                    .map_err(|_| ())
-                    .and_then(|s| mylog::Format::from_str(&s))
-                    .unwrap_or(mylog::Format::Google))
+        .set_format(
+            ::std::env::var("MOONFIRE_FORMAT")
+                .map_err(|_| ())
+                .and_then(|s| mylog::Format::from_str(&s))
+                .unwrap_or(mylog::Format::Google),
+        )
         .set_spec(&::std::env::var("MOONFIRE_LOG").unwrap_or("info".to_owned()))
         .build();
     h.clone().install().unwrap();
 
-    if let Err(e) = { let _a = h.async_scope(); args.run() } {
+    if let Err(e) = {
+        let _a = h.async_scope();
+        args.run()
+    } {
         error!("{:?}", e);
         ::std::process::exit(1);
     }

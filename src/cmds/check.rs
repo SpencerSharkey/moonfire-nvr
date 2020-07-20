@@ -38,8 +38,12 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 pub struct Args {
     /// Directory holding the SQLite3 index database.
-    #[structopt(long, default_value = "/var/lib/moonfire-nvr/db", value_name="path",
-                parse(from_os_str))]
+    #[structopt(
+        long,
+        default_value = "/var/lib/moonfire-nvr/db",
+        value_name = "path",
+        parse(from_os_str)
+    )]
     db_dir: PathBuf,
 
     /// Compare sample file lengths on disk to the database.
@@ -50,7 +54,10 @@ pub struct Args {
 pub fn run(args: &Args) -> Result<(), Error> {
     // TODO: ReadOnly should be sufficient but seems to fail.
     let (_db_dir, conn) = super::open_conn(&args.db_dir, super::OpenMode::ReadWrite)?;
-    check::run(&conn, &check::Options {
-        compare_lens: args.compare_lens,
-    })
+    check::run(
+        &conn,
+        &check::Options {
+            compare_lens: args.compare_lens,
+        },
+    )
 }

@@ -35,13 +35,13 @@ use crate::db::{self, CompositeId, FromSqlUuid};
 use crate::dir;
 use crate::raw;
 use crate::recording;
+use crate::schema;
 use failure::Error;
 use fnv::FnvHashMap;
 use log::error;
 use nix::fcntl::AtFlags;
 use protobuf::prelude::MessageField;
 use rusqlite::params;
-use crate::schema;
 use std::os::unix::io::AsRawFd;
 
 pub struct Options {
@@ -63,12 +63,14 @@ pub fn run(conn: &rusqlite::Connection, opts: &Options) -> Result<(), Error> {
     // Scan directories.
     let mut streams_by_dir: FnvHashMap<i32, Dir> = FnvHashMap::default();
     {
-        let mut dir_stmt = conn.prepare(r#"
+        let mut dir_stmt = conn.prepare(
+            r#"
             select d.id, d.path, d.uuid, d.last_complete_open_id, o.uuid
             from sample_file_dir d left join open o on (d.last_complete_open_id = o.id)
-        "#)?;
-        let mut garbage_stmt = conn.prepare_cached(
-            "select composite_id from garbage where sample_file_dir_id = ?")?;
+        "#,
+        )?;
+        let mut garbage_stmt =
+            conn.prepare_cached("select composite_id from garbage where sample_file_dir_id = ?")?;
         let mut rows = dir_stmt.query(params![])?;
         while let Some(row) = rows.next()? {
             let mut meta = schema::DirMeta::default();
@@ -92,7 +94,9 @@ pub fn run(conn: &rusqlite::Connection, opts: &Options) -> Result<(), Error> {
             while let Some(row) = rows.next()? {
                 let id = CompositeId(row.get(0)?);
                 let s = streams.entry(id.stream()).or_insert_with(Stream::default);
-                s.entry(id.recording()).or_insert_with(Recording::default).garbage_row = true;
+                s.entry(id.recording())
+                    .or_insert_with(Recording::default)
+                    .garbage_row = true;
             }
             streams_by_dir.insert(dir_id, streams);
         }
@@ -100,9 +104,11 @@ pub fn run(conn: &rusqlite::Connection, opts: &Options) -> Result<(), Error> {
 
     // Scan known streams.
     {
-        let mut stmt = conn.prepare(r#"
+        let mut stmt = conn.prepare(
+            r#"
             select id, sample_file_dir_id from stream where sample_file_dir_id is not null
-        "#)?;
+        "#,
+        )?;
         let mut rows = stmt.query(params![])?;
         while let Some(row) = rows.next()? {
             let stream_id = row.get(0)?;
@@ -120,9 +126,15 @@ pub fn run(conn: &rusqlite::Connection, opts: &Options) -> Result<(), Error> {
         for (&stream_id, stream) in streams {
             for (&recording_id, r) in stream {
                 let id = CompositeId::new(stream_id, recording_id);
-                if r.recording_row.is_some() || r.playback_row.is_some() ||
-                   r.integrity_row || !r.garbage_row {
-                    error!("dir {} recording {} for unknown stream: {:#?}", dir_id, id, r);
+                if r.recording_row.is_some()
+                    || r.playback_row.is_some()
+                    || r.integrity_row
+                    || !r.garbage_row
+                {
+                    error!(
+                        "dir {} recording {} for unknown stream: {:#?}",
+                        dir_id, id, r
+                    );
                 }
             }
         }
@@ -179,7 +191,11 @@ fn summarize_index(video_index: &[u8]) -> Result<RecordingSummary, Error> {
         video_samples,
         video_sync_samples,
         duration,
-        flags: if it.duration_90k == 0 { db::RecordingFlags::TrailingZero as i32 } else { 0 },
+        flags: if it.duration_90k == 0 {
+            db::RecordingFlags::TrailingZero as i32
+        } else {
+            0
+        },
     })
 }
 
@@ -195,33 +211,46 @@ fn read_dir(d: &dir::SampleFileDir, opts: &Options) -> Result<Dir, Error> {
         let f = e.file_name();
         match f.to_bytes() {
             b"." | b".." | b"meta" => continue,
-            _ => {},
+            _ => {}
         };
         let id = match dir::parse_id(f.to_bytes()) {
             Ok(id) => id,
             Err(_) => {
-                error!("sample file directory contains file {:?} which isn't an id", f);
+                error!(
+                    "sample file directory contains file {:?} which isn't an id",
+                    f
+                );
                 continue;
             }
         };
         let len = if opts.compare_lens {
             nix::sys::stat::fstatat(fd, f, AtFlags::empty())?.st_size as u64
-        } else { 0 };
+        } else {
+            0
+        };
         let stream = dir.entry(id.stream()).or_insert_with(Stream::default);
-        stream.entry(id.recording()).or_insert_with(Recording::default).file = Some(len);
+        stream
+            .entry(id.recording())
+            .or_insert_with(Recording::default)
+            .file = Some(len);
     }
     Ok(dir)
 }
 
 /// Looks through a known stream for errors.
-fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
-                  mut stream: Stream) -> Result<(), Error> {
+fn compare_stream(
+    conn: &rusqlite::Connection,
+    stream_id: i32,
+    opts: &Options,
+    mut stream: Stream,
+) -> Result<(), Error> {
     let start = CompositeId::new(stream_id, 0);
     let end = CompositeId::new(stream_id, i32::max_value());
 
     // recording row.
     {
-        let mut stmt = conn.prepare_cached(r#"
+        let mut stmt = conn.prepare_cached(
+            r#"
             select
               composite_id,
               flags,
@@ -233,7 +262,8 @@ fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
               recording
             where
               composite_id between ? and ?
-        "#)?;
+        "#,
+        )?;
         let mut rows = stmt.query(params![start.0, end.0])?;
         while let Some(row) = rows.next()? {
             let id = CompositeId(row.get(0)?);
@@ -244,15 +274,17 @@ fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
                 video_samples: row.get(4)?,
                 video_sync_samples: row.get(5)?,
             };
-            stream.entry(id.recording())
-                  .or_insert_with(Recording::default)
-                  .recording_row = Some(s);
+            stream
+                .entry(id.recording())
+                .or_insert_with(Recording::default)
+                .recording_row = Some(s);
         }
     }
 
     // recording_playback row.
     {
-        let mut stmt = conn.prepare_cached(r#"
+        let mut stmt = conn.prepare_cached(
+            r#"
             select
               composite_id,
               video_index
@@ -260,7 +292,8 @@ fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
               recording_playback
             where
               composite_id between ? and ?
-        "#)?;
+        "#,
+        )?;
         let mut rows = stmt.query(params![start.0, end.0])?;
         while let Some(row) = rows.next()? {
             let id = CompositeId(row.get(0)?);
@@ -270,30 +303,34 @@ fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
                 Err(e) => {
                     error!("id {} has bad video_index: {}", id, e);
                     continue;
-                },
+                }
             };
-            stream.entry(id.recording())
-                  .or_insert_with(Recording::default)
-                  .playback_row = Some(s);
+            stream
+                .entry(id.recording())
+                .or_insert_with(Recording::default)
+                .playback_row = Some(s);
         }
     }
 
     // recording_integrity row.
     {
-        let mut stmt = conn.prepare_cached(r#"
+        let mut stmt = conn.prepare_cached(
+            r#"
             select
               composite_id
             from
               recording_integrity
             where
               composite_id between ? and ?
-        "#)?;
+        "#,
+        )?;
         let mut rows = stmt.query(params![start.0, end.0])?;
         while let Some(row) = rows.next()? {
             let id = CompositeId(row.get(0)?);
-            stream.entry(id.recording())
-                  .or_insert_with(Recording::default)
-                  .integrity_row = true;
+            stream
+                .entry(id.recording())
+                .or_insert_with(Recording::default)
+                .integrity_row = true;
         }
     }
 
@@ -302,25 +339,32 @@ fn compare_stream(conn: &rusqlite::Connection, stream_id: i32, opts: &Options,
         let r = match recording.recording_row {
             Some(ref r) => r,
             None => {
-                if !recording.garbage_row || recording.playback_row.is_some() ||
-                   recording.integrity_row {
+                if !recording.garbage_row
+                    || recording.playback_row.is_some()
+                    || recording.integrity_row
+                {
                     error!("Missing recording row for {}: {:#?}", id, recording);
                 }
                 continue;
-            },
+            }
         };
         match recording.playback_row {
             Some(ref p) => {
                 if r != p {
-                    error!("Recording {} summary doesn't match video_index: {:#?}", id, recording);
+                    error!(
+                        "Recording {} summary doesn't match video_index: {:#?}",
+                        id, recording
+                    );
                 }
-            },
+            }
             None => error!("Recording {} missing playback row: {:#?}", id, recording),
         }
         match recording.file {
-            Some(len) => if opts.compare_lens && r.bytes != len {
-                error!("Recording {} length mismatch: {:#?}", id, recording);
-            },
+            Some(len) => {
+                if opts.compare_lens && r.bytes != len {
+                    error!("Recording {} length mismatch: {:#?}", id, recording);
+                }
+            }
             None => error!("Recording {} missing file: {:#?}", id, recording),
         }
     }

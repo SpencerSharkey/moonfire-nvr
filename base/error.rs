@@ -58,7 +58,9 @@ impl Fail for Error {
 
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Error {
-        Error { inner: Context::new(kind) }
+        Error {
+            inner: Context::new(kind),
+        }
     }
 }
 
@@ -98,23 +100,41 @@ impl fmt::Display for Error {
 /// each error.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Fail)]
 pub enum ErrorKind {
-    #[fail(display = "Cancelled")] Cancelled,
-    #[fail(display = "Unknown")] Unknown,
-    #[fail(display = "Invalid argument")] InvalidArgument,
-    #[fail(display = "Deadline exceeded")] DeadlineExceeded,
-    #[fail(display = "Not found")] NotFound,
-    #[fail(display = "Already exists")] AlreadyExists,
-    #[fail(display = "Permission denied")] PermissionDenied,
-    #[fail(display = "Unauthenticated")] Unauthenticated,
-    #[fail(display = "Resource exhausted")] ResourceExhausted,
-    #[fail(display = "Failed precondition")] FailedPrecondition,
-    #[fail(display = "Aborted")] Aborted,
-    #[fail(display = "Out of range")] OutOfRange,
-    #[fail(display = "Unimplemented")] Unimplemented,
-    #[fail(display = "Internal")] Internal,
-    #[fail(display = "Unavailable")] Unavailable,
-    #[fail(display = "Data loss")] DataLoss,
-    #[doc(hidden)] #[fail(display = "__Nonexhaustive")] __Nonexhaustive,
+    #[fail(display = "Cancelled")]
+    Cancelled,
+    #[fail(display = "Unknown")]
+    Unknown,
+    #[fail(display = "Invalid argument")]
+    InvalidArgument,
+    #[fail(display = "Deadline exceeded")]
+    DeadlineExceeded,
+    #[fail(display = "Not found")]
+    NotFound,
+    #[fail(display = "Already exists")]
+    AlreadyExists,
+    #[fail(display = "Permission denied")]
+    PermissionDenied,
+    #[fail(display = "Unauthenticated")]
+    Unauthenticated,
+    #[fail(display = "Resource exhausted")]
+    ResourceExhausted,
+    #[fail(display = "Failed precondition")]
+    FailedPrecondition,
+    #[fail(display = "Aborted")]
+    Aborted,
+    #[fail(display = "Out of range")]
+    OutOfRange,
+    #[fail(display = "Unimplemented")]
+    Unimplemented,
+    #[fail(display = "Internal")]
+    Internal,
+    #[fail(display = "Unavailable")]
+    Unavailable,
+    #[fail(display = "Data loss")]
+    DataLoss,
+    #[doc(hidden)]
+    #[fail(display = "__Nonexhaustive")]
+    __Nonexhaustive,
 }
 
 /// Extension methods for `Result`.
@@ -131,7 +151,10 @@ pub trait ResultExt<T, E> {
     fn err_kind(self, k: ErrorKind) -> Result<T, Error>;
 }
 
-impl<T, E> ResultExt<T, E> for Result<T, E> where E: Into<failure::Error> {
+impl<T, E> ResultExt<T, E> for Result<T, E>
+where
+    E: Into<failure::Error>,
+{
     fn err_kind(self, k: ErrorKind) -> Result<T, Error> {
         self.map_err(|e| e.into().context(k).into())
     }

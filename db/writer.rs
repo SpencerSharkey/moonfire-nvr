@@ -32,34 +32,34 @@
 //!
 //! This includes opening files for serving, rotating away old files, and saving new files.
 
-use base::clock::{self, Clocks};
 use crate::db::{self, CompositeId};
 use crate::dir;
 use crate::recording;
-use failure::{Error, bail, format_err};
+use base::clock::{self, Clocks};
+use failure::{bail, format_err, Error};
 use fnv::FnvHashMap;
-use parking_lot::Mutex;
 use log::{debug, trace, warn};
 use openssl::hash;
-use std::cmp::Ordering;
+use parking_lot::Mutex;
 use std::cmp;
+use std::cmp::Ordering;
 use std::io;
 use std::mem;
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration as StdDuration;
 use time::{Duration, Timespec};
 
-pub trait DirWriter : 'static + Send {
-    type File : FileWriter;
+pub trait DirWriter: 'static + Send {
+    type File: FileWriter;
 
     fn create_file(&self, id: CompositeId) -> Result<Self::File, nix::Error>;
     fn sync(&self) -> Result<(), nix::Error>;
     fn unlink_file(&self, id: CompositeId) -> Result<(), nix::Error>;
 }
 
-pub trait FileWriter : 'static {
+pub trait FileWriter: 'static {
     /// As in `std::fs::File::sync_all`.
     fn sync_all(&self) -> Result<(), io::Error>;
 
@@ -73,15 +73,21 @@ impl DirWriter for Arc<dir::SampleFileDir> {
     fn create_file(&self, id: CompositeId) -> Result<Self::File, nix::Error> {
         dir::SampleFileDir::create_file(self, id)
     }
-    fn sync(&self) -> Result<(), nix::Error> { dir::SampleFileDir::sync(self) }
+    fn sync(&self) -> Result<(), nix::Error> {
+        dir::SampleFileDir::sync(self)
+    }
     fn unlink_file(&self, id: CompositeId) -> Result<(), nix::Error> {
         dir::SampleFileDir::unlink_file(self, id)
     }
 }
 
 impl FileWriter for ::std::fs::File {
-    fn sync_all(&self) -> Result<(), io::Error> { self.sync_all() }
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> { io::Write::write(self, buf) }
+    fn sync_all(&self) -> Result<(), io::Error> {
+        self.sync_all()
+    }
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        io::Write::write(self, buf)
+    }
 }
 
 /// A command sent to the syncer. These correspond to methods in the `SyncerChannel` struct.
@@ -96,7 +102,9 @@ enum SyncerCommand<F> {
 pub struct SyncerChannel<F>(mpsc::Sender<SyncerCommand<F>>);
 
 impl<F> ::std::clone::Clone for SyncerChannel<F> {
-    fn clone(&self) -> Self { SyncerChannel(self.0.clone()) }
+    fn clone(&self) -> Self {
+        SyncerChannel(self.0.clone())
+    }
 }
 
 /// State of the worker thread.
@@ -162,23 +170,32 @@ impl Eq for PlannedFlush {}
 /// Note that dropping all `SyncerChannel` clones currently includes calling
 /// `LockedDatabase::clear_on_flush`, as this function installs a hook to watch database flushes.
 /// TODO: add a join wrapper which arranges for the on flush hook to be removed automatically.
-pub fn start_syncer<C>(db: Arc<db::Database<C>>, dir_id: i32)
-                       -> Result<(SyncerChannel<::std::fs::File>, thread::JoinHandle<()>), Error>
-where C: Clocks + Clone {
+pub fn start_syncer<C>(
+    db: Arc<db::Database<C>>,
+    dir_id: i32,
+) -> Result<(SyncerChannel<::std::fs::File>, thread::JoinHandle<()>), Error>
+where
+    C: Clocks + Clone,
+{
     let db2 = db.clone();
     let (mut syncer, path) = Syncer::new(&db.lock(), db2, dir_id)?;
     syncer.initial_rotation()?;
     let (snd, rcv) = mpsc::channel();
     db.lock().on_flush(Box::new({
         let snd = snd.clone();
-        move || if let Err(e) = snd.send(SyncerCommand::DatabaseFlushed) {
-            warn!("Unable to notify syncer for dir {} of flush: {}", dir_id, e);
+        move || {
+            if let Err(e) = snd.send(SyncerCommand::DatabaseFlushed) {
+                warn!("Unable to notify syncer for dir {} of flush: {}", dir_id, e);
+            }
         }
     }));
-    Ok((SyncerChannel(snd),
+    Ok((
+        SyncerChannel(snd),
         thread::Builder::new()
             .name(format!("sync-{}", path))
-            .spawn(move || { while syncer.iter(&rcv) {} }).unwrap()))
+            .spawn(move || while syncer.iter(&rcv) {})
+            .unwrap(),
+    ))
 }
 
 pub struct NewLimit {
@@ -189,21 +206,28 @@ pub struct NewLimit {
 /// Deletes recordings if necessary to fit within the given new `retain_bytes` limit.
 /// Note this doesn't change the limit in the database; it only deletes files.
 /// Pass a limit of 0 to delete all recordings associated with a camera.
-pub fn lower_retention(db: Arc<db::Database>, dir_id: i32, limits: &[NewLimit])
-                       -> Result<(), Error> {
+pub fn lower_retention(
+    db: Arc<db::Database>,
+    dir_id: i32,
+    limits: &[NewLimit],
+) -> Result<(), Error> {
     let db2 = db.clone();
     let (mut syncer, _) = Syncer::new(&db.lock(), db2, dir_id)?;
     syncer.do_rotation(|db| {
         for l in limits {
             let (fs_bytes_before, extra);
             {
-                let stream = db.streams_by_id().get(&l.stream_id)
-                               .ok_or_else(|| format_err!("no such stream {}", l.stream_id))?;
-                fs_bytes_before = stream.fs_bytes + stream.fs_bytes_to_add -
-                                  stream.fs_bytes_to_delete;
+                let stream = db
+                    .streams_by_id()
+                    .get(&l.stream_id)
+                    .ok_or_else(|| format_err!("no such stream {}", l.stream_id))?;
+                fs_bytes_before =
+                    stream.fs_bytes + stream.fs_bytes_to_add - stream.fs_bytes_to_delete;
                 extra = stream.retain_bytes - l.limit;
             }
-            if l.limit >= fs_bytes_before { continue }
+            if l.limit >= fs_bytes_before {
+                continue;
+            }
             delete_recordings(db, l.stream_id, extra)?;
         }
         Ok(())
@@ -211,8 +235,11 @@ pub fn lower_retention(db: Arc<db::Database>, dir_id: i32, limits: &[NewLimit])
 }
 
 /// Deletes recordings to bring a stream's disk usage within bounds.
-fn delete_recordings(db: &mut db::LockedDatabase, stream_id: i32,
-                     extra_bytes_needed: i64) -> Result<(), Error> {
+fn delete_recordings(
+    db: &mut db::LockedDatabase,
+    stream_id: i32,
+    extra_bytes_needed: i64,
+) -> Result<(), Error> {
     let fs_bytes_needed = {
         let stream = match db.streams_by_id().get(&stream_id) {
             None => bail!("no stream {}", stream_id),
@@ -223,8 +250,11 @@ fn delete_recordings(db: &mut db::LockedDatabase, stream_id: i32,
     };
     let mut fs_bytes_to_delete = 0;
     if fs_bytes_needed <= 0 {
-        debug!("{}: have remaining quota of {}", stream_id,
-               base::strutil::encode_size(-fs_bytes_needed));
+        debug!(
+            "{}: have remaining quota of {}",
+            stream_id,
+            base::strutil::encode_size(-fs_bytes_needed)
+        );
         return Ok(());
     }
     let mut n = 0;
@@ -243,7 +273,9 @@ impl<F: FileWriter> SyncerChannel<F> {
     /// Asynchronously syncs the given writer, closes it, records it into the database, and
     /// starts rotation.
     fn async_save_recording(&self, id: CompositeId, duration: recording::Duration, f: F) {
-        self.0.send(SyncerCommand::AsyncSaveRecording(id, duration, f)).unwrap();
+        self.0
+            .send(SyncerCommand::AsyncSaveRecording(id, duration, f))
+            .unwrap();
     }
 
     /// For testing: flushes the syncer, waiting for all currently-queued commands to complete,
@@ -252,14 +284,16 @@ impl<F: FileWriter> SyncerChannel<F> {
     pub fn flush(&self) {
         let (snd, rcv) = mpsc::sync_channel(0);
         self.0.send(SyncerCommand::Flush(snd)).unwrap();
-        rcv.recv().unwrap_err();  // syncer should just drop the channel, closing it.
+        rcv.recv().unwrap_err(); // syncer should just drop the channel, closing it.
     }
 }
 
 /// Lists files which should be "abandoned" (deleted without ever recording in the database)
 /// on opening.
-fn list_files_to_abandon(dir: &dir::SampleFileDir, streams_to_next: FnvHashMap<i32, i32>)
-                         -> Result<Vec<CompositeId>, Error> {
+fn list_files_to_abandon(
+    dir: &dir::SampleFileDir,
+    streams_to_next: FnvHashMap<i32, i32>,
+) -> Result<Vec<CompositeId>, Error> {
     let mut v = Vec::new();
     let mut d = dir.opendir()?;
     for e in d.iter() {
@@ -270,7 +304,7 @@ fn list_files_to_abandon(dir: &dir::SampleFileDir, streams_to_next: FnvHashMap<i
         };
         let next = match streams_to_next.get(&id.stream()) {
             Some(n) => *n,
-            None => continue,  // unknown stream.
+            None => continue, // unknown stream.
         };
         if id.recording() >= next {
             v.push(id);
@@ -280,26 +314,30 @@ fn list_files_to_abandon(dir: &dir::SampleFileDir, streams_to_next: FnvHashMap<i
 }
 
 impl<C: Clocks + Clone> Syncer<C, Arc<dir::SampleFileDir>> {
-    fn new(l: &db::LockedDatabase, db: Arc<db::Database<C>>, dir_id: i32)
-           -> Result<(Self, String), Error> {
-        let d = l.sample_file_dirs_by_id()
-                 .get(&dir_id)
-                 .ok_or_else(|| format_err!("no dir {}", dir_id))?;
+    fn new(
+        l: &db::LockedDatabase,
+        db: Arc<db::Database<C>>,
+        dir_id: i32,
+    ) -> Result<(Self, String), Error> {
+        let d = l
+            .sample_file_dirs_by_id()
+            .get(&dir_id)
+            .ok_or_else(|| format_err!("no dir {}", dir_id))?;
         let dir = d.get()?;
 
         // Abandon files.
         // First, get a list of the streams in question.
-        let streams_to_next: FnvHashMap<_, _> =
-            l.streams_by_id()
-             .iter()
-             .filter_map(|(&k, v)| {
-                 if v.sample_file_dir_id == Some(dir_id) {
+        let streams_to_next: FnvHashMap<_, _> = l
+            .streams_by_id()
+            .iter()
+            .filter_map(|(&k, v)| {
+                if v.sample_file_dir_id == Some(dir_id) {
                     Some((k, v.next_recording_id))
-                 } else {
-                     None
-                 }
-             })
-             .collect();
+                } else {
+                    None
+                }
+            })
+            .collect();
         let to_abandon = list_files_to_abandon(&dir, streams_to_next)?;
         let mut undeletable = 0;
         for &id in &to_abandon {
@@ -316,12 +354,15 @@ impl<C: Clocks + Clone> Syncer<C, Arc<dir::SampleFileDir>> {
             bail!("Unable to delete {} abandoned recordings.", undeletable);
         }
 
-        Ok((Syncer {
-            dir_id,
-            dir,
-            db,
-            planned_flushes: std::collections::BinaryHeap::new(),
-        }, d.path.clone()))
+        Ok((
+            Syncer {
+                dir_id,
+                dir,
+                db,
+                planned_flushes: std::collections::BinaryHeap::new(),
+            },
+            d.path.clone(),
+        ))
     }
 
     /// Rotates files for all streams and deletes stale files from previous runs.
@@ -338,7 +379,9 @@ impl<C: Clocks + Clone> Syncer<C, Arc<dir::SampleFileDir>> {
 
     /// Helper to do initial or retention-lowering rotation. Called from main thread.
     fn do_rotation<F>(&mut self, delete_recordings: F) -> Result<(), Error>
-    where F: Fn(&mut db::LockedDatabase) -> Result<(), Error> {
+    where
+        F: Fn(&mut db::LockedDatabase) -> Result<(), Error>,
+    {
         {
             let mut db = self.db.lock();
             delete_recordings(&mut *db)?;
@@ -361,8 +404,10 @@ impl<C: Clocks + Clone> Syncer<C, Arc<dir::SampleFileDir>> {
                 }
             }
             if errors > 0 {
-                bail!("Unable to unlink {} files (see earlier warning messages for details)",
-                      errors);
+                bail!(
+                    "Unable to unlink {} files (see earlier warning messages for details)",
+                    errors
+                );
             }
             self.dir.sync()?;
             self.db.lock().delete_garbage(self.dir_id, &mut garbage)?;
@@ -381,7 +426,7 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
         let next_flush = self.planned_flushes.peek().map(|f| f.when);
         let cmd = match next_flush {
             None => match cmds.recv() {
-                Err(_) => return false,  // all cmd senders are gone.
+                Err(_) => return false, // all cmd senders are gone.
                 Ok(cmd) => cmd,
             },
             Some(t) => {
@@ -390,14 +435,14 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
                 // Calculate the timeout to use, mapping negative durations to 0.
                 let timeout = (t - now).to_std().unwrap_or(StdDuration::new(0, 0));
                 match self.db.clocks().recv_timeout(&cmds, timeout) {
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,  // cmd senders gone.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false, // cmd senders gone.
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         self.flush();
                         return true;
-                    },
+                    }
                     Ok(cmd) => cmd,
                 }
-            },
+            }
         };
 
         // Have a command; handle it.
@@ -410,7 +455,7 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
                 if let Some(mut f) = self.planned_flushes.peek_mut() {
                     f.senders.push(flush);
                 }
-            },
+            }
         };
 
         true
@@ -441,7 +486,9 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
             });
         }
         clock::retry_forever(c, &mut || self.dir.sync());
-        clock::retry_forever(c, &mut || self.db.lock().delete_garbage(self.dir_id, &mut garbage));
+        clock::retry_forever(c, &mut || {
+            self.db.lock().delete_garbage(self.dir_id, &mut garbage)
+        });
     }
 
     /// Saves the given recording and causes rotation to happen. Called from worker thread.
@@ -467,8 +514,14 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
         let how_soon = Duration::seconds(s.flush_if_sec) - duration.to_tm_duration();
         let now = self.db.clocks().monotonic();
         let when = now + how_soon;
-        let reason = format!("{} sec after start of {} {}-{} recording {}",
-                             s.flush_if_sec, duration, c.short_name, s.type_.as_str(), id);
+        let reason = format!(
+            "{} sec after start of {} {}-{} recording {}",
+            s.flush_if_sec,
+            duration,
+            c.short_name,
+            s.type_.as_str(),
+            id
+        );
         trace!("scheduling flush in {} because {}", how_soon, &reason);
         self.planned_flushes.push(PlannedFlush {
             when,
@@ -494,13 +547,17 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
                 None => {
                     // Removing streams while running hasn't been implemented yet, so this should
                     // be impossible.
-                    warn!("bug: no stream for {} which was scheduled to be flushed", f.recording);
+                    warn!(
+                        "bug: no stream for {} which was scheduled to be flushed",
+                        f.recording
+                    );
                     PeekMut::pop(f);
                     continue;
                 }
             };
 
-            if s.next_recording_id <= f.recording.recording() { // not yet committed.
+            if s.next_recording_id <= f.recording.recording() {
+                // not yet committed.
                 break;
             }
 
@@ -519,10 +576,14 @@ impl<C: Clocks + Clone, D: DirWriter> Syncer<C, D> {
         }
         if let Err(e) = l.flush(&f.reason) {
             let d = Duration::minutes(1);
-            warn!("flush failure on save for reason {}; will retry after {}: {:?}",
-                  f.reason, d, e);
-            self.planned_flushes.peek_mut().expect("planned_flushes is non-empty").when =
-                self.db.clocks().monotonic() + Duration::minutes(1);
+            warn!(
+                "flush failure on save for reason {}; will retry after {}: {:?}",
+                f.reason, d, e
+            );
+            self.planned_flushes
+                .peek_mut()
+                .expect("planned_flushes is non-empty")
+                .when = self.db.clocks().monotonic() + Duration::minutes(1);
             return;
         }
 
@@ -606,13 +667,13 @@ impl ClockAdjuster {
         // 2,700/90,000ths of a second over a minute) to prevent noticeably speeding up or slowing
         // down playback.
         let (every_minus_1, ndir) = match local_time_delta {
-            Some(d) if d <= -2700 => (1999,  1),
-            Some(d) if d >=  2700 => (1999, -1),
-            Some(d) if d < -60 => ((60 * 90000) / -(d as i32) - 1,  1),
-            Some(d) if d > 60  => ((60 * 90000) /  (d as i32) - 1, -1),
+            Some(d) if d <= -2700 => (1999, 1),
+            Some(d) if d >= 2700 => (1999, -1),
+            Some(d) if d < -60 => ((60 * 90000) / -(d as i32) - 1, 1),
+            Some(d) if d > 60 => ((60 * 90000) / (d as i32) - 1, -1),
             _ => (i32::max_value(), 0),
         };
-        ClockAdjuster{
+        ClockAdjuster {
             every_minus_1,
             ndir,
             cur: 0,
@@ -652,8 +713,13 @@ struct PreviousWriter {
 
 impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
     /// `db` must not be locked.
-    pub fn new(dir: &'a D, db: &'a db::Database<C>, channel: &'a SyncerChannel<D::File>,
-               stream_id: i32, video_sample_entry_id: i32) -> Self {
+    pub fn new(
+        dir: &'a D,
+        db: &'a db::Database<C>,
+        channel: &'a SyncerChannel<D::File>,
+        stream_id: i32,
+        video_sample_entry_id: i32,
+    ) -> Self {
         Writer {
             dir,
             db,
@@ -674,13 +740,18 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
             WriterState::Open(_) => return Ok(()),
             WriterState::Closed(prev) => Some(prev),
         };
-        let (id, r) = self.db.lock().add_recording(self.stream_id, db::RecordingToInsert {
-            run_offset: prev.map(|p| p.run_offset + 1).unwrap_or(0),
-            start: prev.map(|p| p.end).unwrap_or(recording::Time(i64::max_value())),
-            video_sample_entry_id: self.video_sample_entry_id,
-            flags: db::RecordingFlags::Growing as i32,
-            ..Default::default()
-        })?;
+        let (id, r) = self.db.lock().add_recording(
+            self.stream_id,
+            db::RecordingToInsert {
+                run_offset: prev.map(|p| p.run_offset + 1).unwrap_or(0),
+                start: prev
+                    .map(|p| p.end)
+                    .unwrap_or(recording::Time(i64::max_value())),
+                video_sample_entry_id: self.video_sample_entry_id,
+                flags: db::RecordingFlags::Growing as i32,
+                ..Default::default()
+            },
+        )?;
         let f = clock::retry_forever(&self.db.clocks(), &mut || self.dir.create_file(id));
 
         self.state = WriterState::Open(InnerWriter {
@@ -693,9 +764,9 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
             local_start: recording::Time(i64::max_value()),
             adjuster: ClockAdjuster::new(prev.map(|p| p.local_time_delta.0)),
             unflushed_sample: None,
-         });
+        });
         Ok(())
-     }
+    }
 
     pub fn previously_opened(&self) -> Result<bool, Error> {
         Ok(match self.state {
@@ -707,8 +778,13 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
 
     /// Writes a new frame to this segment.
     /// `local_time` should be the local clock's time as of when this packet was received.
-    pub fn write(&mut self, pkt: &[u8], local_time: recording::Time, pts_90k: i64,
-                 is_key: bool) -> Result<(), Error> {
+    pub fn write(
+        &mut self,
+        pkt: &[u8],
+        local_time: recording::Time,
+        pts_90k: i64,
+        is_key: bool,
+    ) -> Result<(), Error> {
         self.open()?;
         let w = match self.state {
             WriterState::Open(ref mut w) => w,
@@ -723,27 +799,40 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
             if duration <= 0 {
                 // Restore invariant.
                 w.unflushed_sample = Some(unflushed);
-                bail!("pts not monotonically increasing; got {} then {}",
-                      unflushed.pts_90k, pts_90k);
+                bail!(
+                    "pts not monotonically increasing; got {} then {}",
+                    unflushed.pts_90k,
+                    pts_90k
+                );
             }
             let duration = w.adjuster.adjust(duration);
-            let d = match w.add_sample(duration, unflushed.len, unflushed.is_key,
-                                       unflushed.local_time) {
+            let d = match w.add_sample(
+                duration,
+                unflushed.len,
+                unflushed.is_key,
+                unflushed.local_time,
+            ) {
                 Ok(d) => d,
                 Err(e) => {
                     // Restore invariant.
                     w.unflushed_sample = Some(unflushed);
                     return Err(e);
-                },
+                }
             };
 
             // If the sample `write` was called on is a key frame, then the prior frames (including
             // the one we just flushed) represent a live segment. Send it out.
             if is_key {
-                self.db.lock().send_live_segment(self.stream_id, db::LiveSegment {
-                    recording: w.id.recording(),
-                    off_90k: w.completed_live_segment_off_90k .. d,
-                }).unwrap();
+                self.db
+                    .lock()
+                    .send_live_segment(
+                        self.stream_id,
+                        db::LiveSegment {
+                            recording: w.id.recording(),
+                            off_90k: w.completed_live_segment_off_90k..d,
+                        },
+                    )
+                    .unwrap();
                 w.completed_live_segment_off_90k = d;
             }
         }
@@ -770,7 +859,7 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
             WriterState::Open(w) => {
                 let prev = w.close(self.channel, next_pts, self.db, self.stream_id)?;
                 WriterState::Closed(prev)
-            },
+            }
             s => s,
         };
         Ok(())
@@ -779,36 +868,62 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Writer<'a, C, D> {
 
 impl<F: FileWriter> InnerWriter<F> {
     /// Returns the total duration of the `RecordingToInsert` (needed for live view path).
-    fn add_sample(&mut self, duration_90k: i32, bytes: i32, is_key: bool,
-                  pkt_local_time: recording::Time) -> Result<i32, Error> {
+    fn add_sample(
+        &mut self,
+        duration_90k: i32,
+        bytes: i32,
+        is_key: bool,
+        pkt_local_time: recording::Time,
+    ) -> Result<i32, Error> {
         let mut l = self.r.lock();
         self.e.add_sample(duration_90k, bytes, is_key, &mut l)?;
         let new = pkt_local_time - recording::Duration(l.duration_90k as i64);
         self.local_start = cmp::min(self.local_start, new);
-        if l.run_offset == 0 {  // start time isn't anchored to previous recording's end; adjust.
+        if l.run_offset == 0 {
+            // start time isn't anchored to previous recording's end; adjust.
             l.start = self.local_start;
         }
         Ok(l.duration_90k)
     }
 
-    fn close<C: Clocks + Clone>(mut self, channel: &SyncerChannel<F>, next_pts: Option<i64>,
-             db: &db::Database<C>, stream_id: i32) -> Result<PreviousWriter, Error> {
-        let unflushed = self.unflushed_sample.take().expect("should always be an unflushed sample");
+    fn close<C: Clocks + Clone>(
+        mut self,
+        channel: &SyncerChannel<F>,
+        next_pts: Option<i64>,
+        db: &db::Database<C>,
+        stream_id: i32,
+    ) -> Result<PreviousWriter, Error> {
+        let unflushed = self
+            .unflushed_sample
+            .take()
+            .expect("should always be an unflushed sample");
         let (last_sample_duration, flags) = match next_pts {
-            None => (self.adjuster.adjust(0), db::RecordingFlags::TrailingZero as i32),
+            None => (
+                self.adjuster.adjust(0),
+                db::RecordingFlags::TrailingZero as i32,
+            ),
             Some(p) => (self.adjuster.adjust((p - unflushed.pts_90k) as i32), 0),
         };
         let mut sha1_bytes = [0u8; 20];
         sha1_bytes.copy_from_slice(&self.hasher.finish().unwrap()[..]);
         let (local_time_delta, run_offset, end);
-        let d = self.add_sample(last_sample_duration, unflushed.len, unflushed.is_key,
-                                unflushed.local_time)?;
+        let d = self.add_sample(
+            last_sample_duration,
+            unflushed.len,
+            unflushed.is_key,
+            unflushed.local_time,
+        )?;
 
         // This always ends a live segment.
-        db.lock().send_live_segment(stream_id, db::LiveSegment {
-            recording: self.id.recording(),
-            off_90k: self.completed_live_segment_off_90k .. d,
-        }).unwrap();
+        db.lock()
+            .send_live_segment(
+                stream_id,
+                db::LiveSegment {
+                    recording: self.id.recording(),
+                    off_90k: self.completed_live_segment_off_90k..d,
+                },
+            )
+            .unwrap();
         let total_duration;
         {
             let mut l = self.r.lock();
@@ -847,57 +962,84 @@ impl<'a, C: Clocks + Clone, D: DirWriter> Drop for Writer<'a, C, D> {
 
 #[cfg(test)]
 mod tests {
-    use base::clock::{Clocks, SimulatedClocks};
+    use super::{ClockAdjuster, Writer};
     use crate::db::{self, CompositeId};
     use crate::recording;
-    use parking_lot::Mutex;
+    use crate::testutil;
+    use base::clock::{Clocks, SimulatedClocks};
     use log::{trace, warn};
+    use parking_lot::Mutex;
     use std::collections::VecDeque;
     use std::io;
-    use std::sync::Arc;
     use std::sync::mpsc;
-    use super::{ClockAdjuster, Writer};
-    use crate::testutil;
+    use std::sync::Arc;
 
     #[derive(Clone)]
     struct MockDir(Arc<Mutex<VecDeque<MockDirAction>>>);
 
     enum MockDirAction {
-        Create(CompositeId, Box<dyn Fn(CompositeId) -> Result<MockFile, nix::Error> + Send>),
+        Create(
+            CompositeId,
+            Box<dyn Fn(CompositeId) -> Result<MockFile, nix::Error> + Send>,
+        ),
         Sync(Box<dyn Fn() -> Result<(), nix::Error> + Send>),
-        Unlink(CompositeId, Box<dyn Fn(CompositeId) -> Result<(), nix::Error> + Send>),
+        Unlink(
+            CompositeId,
+            Box<dyn Fn(CompositeId) -> Result<(), nix::Error> + Send>,
+        ),
     }
 
     impl MockDir {
-        fn new() -> Self { MockDir(Arc::new(Mutex::new(VecDeque::new()))) }
-        fn expect(&self, action: MockDirAction) { self.0.lock().push_back(action); }
-        fn ensure_done(&self) { assert_eq!(self.0.lock().len(), 0); }
+        fn new() -> Self {
+            MockDir(Arc::new(Mutex::new(VecDeque::new())))
+        }
+        fn expect(&self, action: MockDirAction) {
+            self.0.lock().push_back(action);
+        }
+        fn ensure_done(&self) {
+            assert_eq!(self.0.lock().len(), 0);
+        }
     }
 
     impl super::DirWriter for MockDir {
         type File = MockFile;
 
         fn create_file(&self, id: CompositeId) -> Result<Self::File, nix::Error> {
-            match self.0.lock().pop_front().expect("got create_file with no expectation") {
+            match self
+                .0
+                .lock()
+                .pop_front()
+                .expect("got create_file with no expectation")
+            {
                 MockDirAction::Create(expected_id, ref f) => {
                     assert_eq!(id, expected_id);
                     f(id)
-                },
+                }
                 _ => panic!("got create_file({}), expected something else", id),
             }
         }
         fn sync(&self) -> Result<(), nix::Error> {
-            match self.0.lock().pop_front().expect("got sync with no expectation") {
+            match self
+                .0
+                .lock()
+                .pop_front()
+                .expect("got sync with no expectation")
+            {
                 MockDirAction::Sync(f) => f(),
                 _ => panic!("got sync, expected something else"),
             }
         }
         fn unlink_file(&self, id: CompositeId) -> Result<(), nix::Error> {
-            match self.0.lock().pop_front().expect("got unlink_file with no expectation") {
+            match self
+                .0
+                .lock()
+                .pop_front()
+                .expect("got unlink_file with no expectation")
+            {
                 MockDirAction::Unlink(expected_id, f) => {
                     assert_eq!(id, expected_id);
                     f(id)
-                },
+                }
                 _ => panic!("got unlink({}), expected something else", id),
             }
         }
@@ -920,20 +1062,36 @@ mod tests {
     }
 
     impl MockFile {
-        fn new() -> Self { MockFile(Arc::new(Mutex::new(VecDeque::new()))) }
-        fn expect(&self, action: MockFileAction) { self.0.lock().push_back(action); }
-        fn ensure_done(&self) { assert_eq!(self.0.lock().len(), 0); }
+        fn new() -> Self {
+            MockFile(Arc::new(Mutex::new(VecDeque::new())))
+        }
+        fn expect(&self, action: MockFileAction) {
+            self.0.lock().push_back(action);
+        }
+        fn ensure_done(&self) {
+            assert_eq!(self.0.lock().len(), 0);
+        }
     }
 
     impl super::FileWriter for MockFile {
         fn sync_all(&self) -> Result<(), io::Error> {
-            match self.0.lock().pop_front().expect("got sync_all with no expectation") {
+            match self
+                .0
+                .lock()
+                .pop_front()
+                .expect("got sync_all with no expectation")
+            {
                 MockFileAction::SyncAll(f) => f(),
                 _ => panic!("got sync_all, expected something else"),
             }
         }
         fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-            match self.0.lock().pop_front().expect("got write with no expectation") {
+            match self
+                .0
+                .lock()
+                .pop_front()
+                .expect("got write with no expectation")
+            {
                 MockFileAction::Write(f) => f(buf),
                 _ => panic!("got write({:?}), expected something else", buf),
             }
@@ -953,7 +1111,13 @@ mod tests {
     fn new_harness(flush_if_sec: i64) -> Harness {
         let clocks = SimulatedClocks::new(::time::Timespec::new(0, 0));
         let tdb = testutil::TestDb::new_with_flush_if_sec(clocks, flush_if_sec);
-        let dir_id = *tdb.db.lock().sample_file_dirs_by_id().keys().next().unwrap();
+        let dir_id = *tdb
+            .db
+            .lock()
+            .sample_file_dirs_by_id()
+            .keys()
+            .next()
+            .unwrap();
 
         // This starts a real fs-backed syncer. Get rid of it.
         tdb.db.lock().clear_on_flush();
@@ -963,7 +1127,13 @@ mod tests {
         // Start a mocker syncer.
         let dir = MockDir::new();
         let syncer = super::Syncer {
-            dir_id: *tdb.db.lock().sample_file_dirs_by_id().keys().next().unwrap(),
+            dir_id: *tdb
+                .db
+                .lock()
+                .sample_file_dirs_by_id()
+                .keys()
+                .next()
+                .unwrap(),
             dir: dir.clone(),
             db: tdb.db.clone(),
             planned_flushes: std::collections::BinaryHeap::new(),
@@ -971,8 +1141,10 @@ mod tests {
         let (syncer_snd, syncer_rcv) = mpsc::channel();
         tdb.db.lock().on_flush(Box::new({
             let snd = syncer_snd.clone();
-            move || if let Err(e) = snd.send(super::SyncerCommand::DatabaseFlushed) {
-                warn!("Unable to notify syncer for dir {} of flush: {}", dir_id, e);
+            move || {
+                if let Err(e) = snd.send(super::SyncerCommand::DatabaseFlushed) {
+                    warn!("Unable to notify syncer for dir {} of flush: {}", dir_id, e);
+                }
             }
         }));
         Harness {
@@ -986,29 +1158,51 @@ mod tests {
         }
     }
 
-    fn eio() -> io::Error { io::Error::new(io::ErrorKind::Other, "got EIO") }
-    fn nix_eio() -> nix::Error { nix::Error::Sys(nix::errno::Errno::EIO) }
+    fn eio() -> io::Error {
+        io::Error::new(io::ErrorKind::Other, "got EIO")
+    }
+    fn nix_eio() -> nix::Error {
+        nix::Error::Sys(nix::errno::Errno::EIO)
+    }
 
     /// Tests the database flushing while a syncer is still processing a previous flush event.
     #[test]
     fn double_flush() {
         testutil::init();
         let mut h = new_harness(0);
-        h.db.lock().update_retention(&[db::RetentionChange {
-            stream_id: testutil::TEST_STREAM_ID,
-            new_record: true,
-            new_limit: 0,
-        }]).unwrap();
+        h.db.lock()
+            .update_retention(&[db::RetentionChange {
+                stream_id: testutil::TEST_STREAM_ID,
+                new_record: true,
+                new_limit: 0,
+            }])
+            .unwrap();
 
         // Setup: add a 3-byte recording.
-        let video_sample_entry_id = h.db.lock().insert_video_sample_entry(
-            1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned()).unwrap();
-        let mut w = Writer::new(&h.dir, &h.db, &h.channel, testutil::TEST_STREAM_ID,
-                                video_sample_entry_id);
+        let video_sample_entry_id = h
+            .db
+            .lock()
+            .insert_video_sample_entry(1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned())
+            .unwrap();
+        let mut w = Writer::new(
+            &h.dir,
+            &h.db,
+            &h.channel,
+            testutil::TEST_STREAM_ID,
+            video_sample_entry_id,
+        );
         let f = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 1),
-                     Box::new({ let f = f.clone(); move |_id| Ok(f.clone()) })));
-        f.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"123"); Ok(3) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 1),
+            Box::new({
+                let f = f.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"123");
+            Ok(3)
+        })));
         f.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
         w.write(b"123", recording::Time(2), 0, true).unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
@@ -1023,24 +1217,35 @@ mod tests {
 
         // Then a 1-byte recording.
         let f = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 2),
-                     Box::new({ let f = f.clone(); move |_id| Ok(f.clone()) })));
-        f.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"4"); Ok(1) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 2),
+            Box::new({
+                let f = f.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"4");
+            Ok(1)
+        })));
         f.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
         w.write(b"4", recording::Time(3), 1, true).unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
-        h.dir.expect(MockDirAction::Unlink(CompositeId::new(1, 1), Box::new({
-            let db = h.db.clone();
-            move |_| {
-                // The drop(w) below should cause the old recording to be deleted (moved to
-                // garbage). When the database is flushed, the syncer forces garbage collection
-                // including this unlink.
+        h.dir.expect(MockDirAction::Unlink(
+            CompositeId::new(1, 1),
+            Box::new({
+                let db = h.db.clone();
+                move |_| {
+                    // The drop(w) below should cause the old recording to be deleted (moved to
+                    // garbage). When the database is flushed, the syncer forces garbage collection
+                    // including this unlink.
 
-                // Do another database flush here, as if from another syncer.
-                db.lock().flush("another syncer running").unwrap();
-                Ok(())
-            }
-        })));
+                    // Do another database flush here, as if from another syncer.
+                    db.lock().flush("another syncer running").unwrap();
+                    Ok(())
+                }
+            }),
+        ));
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
         drop(w);
 
@@ -1075,8 +1280,10 @@ mod tests {
         // The syncer should shut down cleanly.
         drop(h.channel);
         h.db.lock().clear_on_flush();
-        assert_eq!(h.syncer_rcv.try_recv().err(),
-                   Some(std::sync::mpsc::TryRecvError::Disconnected));
+        assert_eq!(
+            h.syncer_rcv.try_recv().err(),
+            Some(std::sync::mpsc::TryRecvError::Disconnected)
+        );
         assert!(h.syncer.planned_flushes.is_empty());
     }
 
@@ -1084,14 +1291,30 @@ mod tests {
     fn write_path_retries() {
         testutil::init();
         let mut h = new_harness(0);
-        let video_sample_entry_id = h.db.lock().insert_video_sample_entry(
-            1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned()).unwrap();
-        let mut w = Writer::new(&h.dir, &h.db, &h.channel, testutil::TEST_STREAM_ID,
-                                video_sample_entry_id);
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 1), Box::new(|_id| Err(nix_eio()))));
+        let video_sample_entry_id = h
+            .db
+            .lock()
+            .insert_video_sample_entry(1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned())
+            .unwrap();
+        let mut w = Writer::new(
+            &h.dir,
+            &h.db,
+            &h.channel,
+            testutil::TEST_STREAM_ID,
+            video_sample_entry_id,
+        );
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 1),
+            Box::new(|_id| Err(nix_eio())),
+        ));
         let f = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 1),
-                     Box::new({ let f = f.clone(); move |_id| Ok(f.clone()) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 1),
+            Box::new({
+                let f = f.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
         f.expect(MockFileAction::Write(Box::new(|buf| {
             assert_eq!(buf, b"1234");
             Err(eio())
@@ -1111,7 +1334,8 @@ mod tests {
         f.expect(MockFileAction::SyncAll(Box::new(|| Err(eio()))));
         f.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
         w.write(b"1234", recording::Time(1), 0, true).unwrap();
-        h.dir.expect(MockDirAction::Sync(Box::new(|| Err(nix_eio()))));
+        h.dir
+            .expect(MockDirAction::Sync(Box::new(|| Err(nix_eio()))));
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
         drop(w);
         assert!(h.syncer.iter(&h.syncer_rcv)); // AsyncSave
@@ -1132,8 +1356,10 @@ mod tests {
         // The syncer should shut down cleanly.
         drop(h.channel);
         h.db.lock().clear_on_flush();
-        assert_eq!(h.syncer_rcv.try_recv().err(),
-                   Some(std::sync::mpsc::TryRecvError::Disconnected));
+        assert_eq!(
+            h.syncer_rcv.try_recv().err(),
+            Some(std::sync::mpsc::TryRecvError::Disconnected)
+        );
         assert!(h.syncer.planned_flushes.is_empty());
     }
 
@@ -1141,21 +1367,39 @@ mod tests {
     fn gc_path_retries() {
         testutil::init();
         let mut h = new_harness(0);
-        h.db.lock().update_retention(&[db::RetentionChange {
-            stream_id: testutil::TEST_STREAM_ID,
-            new_record: true,
-            new_limit: 0,
-        }]).unwrap();
+        h.db.lock()
+            .update_retention(&[db::RetentionChange {
+                stream_id: testutil::TEST_STREAM_ID,
+                new_record: true,
+                new_limit: 0,
+            }])
+            .unwrap();
 
         // Setup: add a 3-byte recording.
-        let video_sample_entry_id = h.db.lock().insert_video_sample_entry(
-            1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned()).unwrap();
-        let mut w = Writer::new(&h.dir, &h.db, &h.channel, testutil::TEST_STREAM_ID,
-                                video_sample_entry_id);
+        let video_sample_entry_id = h
+            .db
+            .lock()
+            .insert_video_sample_entry(1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned())
+            .unwrap();
+        let mut w = Writer::new(
+            &h.dir,
+            &h.db,
+            &h.channel,
+            testutil::TEST_STREAM_ID,
+            video_sample_entry_id,
+        );
         let f = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 1),
-                     Box::new({ let f = f.clone(); move |_id| Ok(f.clone()) })));
-        f.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"123"); Ok(3) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 1),
+            Box::new({
+                let f = f.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"123");
+            Ok(3)
+        })));
         f.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
         w.write(b"123", recording::Time(2), 0, true).unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
@@ -1171,31 +1415,46 @@ mod tests {
 
         // Then a 1-byte recording.
         let f = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 2),
-                     Box::new({ let f = f.clone(); move |_id| Ok(f.clone()) })));
-        f.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"4"); Ok(1) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 2),
+            Box::new({
+                let f = f.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"4");
+            Ok(1)
+        })));
         f.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
         w.write(b"4", recording::Time(3), 1, true).unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
-        h.dir.expect(MockDirAction::Unlink(CompositeId::new(1, 1), Box::new({
-            let db = h.db.clone();
-            move |_| {
-                // The drop(w) below should cause the old recording to be deleted (moved to
-                // garbage).  When the database is flushed, the syncer forces garbage collection
-                // including this unlink.
+        h.dir.expect(MockDirAction::Unlink(
+            CompositeId::new(1, 1),
+            Box::new({
+                let db = h.db.clone();
+                move |_| {
+                    // The drop(w) below should cause the old recording to be deleted (moved to
+                    // garbage).  When the database is flushed, the syncer forces garbage collection
+                    // including this unlink.
 
-                // This should have already applied the changes to sample file bytes, even
-                // though the garbage has yet to be collected.
-                let l = db.lock();
-                let s = l.streams_by_id().get(&testutil::TEST_STREAM_ID).unwrap();
-                assert_eq!(s.bytes_to_delete, 0);
-                assert_eq!(s.bytes_to_add, 0);
-                assert_eq!(s.sample_file_bytes, 1);
-                Err(nix_eio())  // force a retry.
-            }
-        })));
-        h.dir.expect(MockDirAction::Unlink(CompositeId::new(1, 1), Box::new(|_| Ok(()))));
-        h.dir.expect(MockDirAction::Sync(Box::new(|| Err(nix_eio()))));
+                    // This should have already applied the changes to sample file bytes, even
+                    // though the garbage has yet to be collected.
+                    let l = db.lock();
+                    let s = l.streams_by_id().get(&testutil::TEST_STREAM_ID).unwrap();
+                    assert_eq!(s.bytes_to_delete, 0);
+                    assert_eq!(s.bytes_to_add, 0);
+                    assert_eq!(s.sample_file_bytes, 1);
+                    Err(nix_eio()) // force a retry.
+                }
+            }),
+        ));
+        h.dir.expect(MockDirAction::Unlink(
+            CompositeId::new(1, 1),
+            Box::new(|_| Ok(())),
+        ));
+        h.dir
+            .expect(MockDirAction::Sync(Box::new(|| Err(nix_eio()))));
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
 
         drop(w);
@@ -1225,30 +1484,54 @@ mod tests {
         // The syncer should shut down cleanly.
         drop(h.channel);
         h.db.lock().clear_on_flush();
-        assert_eq!(h.syncer_rcv.try_recv().err(),
-                   Some(std::sync::mpsc::TryRecvError::Disconnected));
+        assert_eq!(
+            h.syncer_rcv.try_recv().err(),
+            Some(std::sync::mpsc::TryRecvError::Disconnected)
+        );
         assert!(h.syncer.planned_flushes.is_empty());
     }
 
     #[test]
     fn planned_flush() {
         testutil::init();
-        let mut h = new_harness(60);  // flush_if_sec=60
+        let mut h = new_harness(60); // flush_if_sec=60
 
         // There's a database constraint forbidding a recording starting at t=0, so advance.
         h.db.clocks().sleep(time::Duration::seconds(1));
 
         // Setup: add a 3-byte recording.
-        let video_sample_entry_id = h.db.lock().insert_video_sample_entry(
-            1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned()).unwrap();
-        let mut w = Writer::new(&h.dir, &h.db, &h.channel, testutil::TEST_STREAM_ID,
-                                video_sample_entry_id);
+        let video_sample_entry_id = h
+            .db
+            .lock()
+            .insert_video_sample_entry(1920, 1080, [0u8; 100].to_vec(), "avc1.000000".to_owned())
+            .unwrap();
+        let mut w = Writer::new(
+            &h.dir,
+            &h.db,
+            &h.channel,
+            testutil::TEST_STREAM_ID,
+            video_sample_entry_id,
+        );
         let f1 = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 1),
-                     Box::new({ let f = f1.clone(); move |_id| Ok(f.clone()) })));
-        f1.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"123"); Ok(3) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 1),
+            Box::new({
+                let f = f1.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f1.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"123");
+            Ok(3)
+        })));
         f1.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
-        w.write(b"123", recording::Time(recording::TIME_UNITS_PER_SEC), 0, true).unwrap();
+        w.write(
+            b"123",
+            recording::Time(recording::TIME_UNITS_PER_SEC),
+            0,
+            true,
+        )
+        .unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
         drop(w);
 
@@ -1262,14 +1545,33 @@ mod tests {
         h.db.clocks().sleep(time::Duration::seconds(30));
 
         // Then, a 1-byte recording.
-        let mut w = Writer::new(&h.dir, &h.db, &h.channel, testutil::TEST_STREAM_ID,
-                                video_sample_entry_id);
+        let mut w = Writer::new(
+            &h.dir,
+            &h.db,
+            &h.channel,
+            testutil::TEST_STREAM_ID,
+            video_sample_entry_id,
+        );
         let f2 = MockFile::new();
-        h.dir.expect(MockDirAction::Create(CompositeId::new(1, 2),
-                     Box::new({ let f = f2.clone(); move |_id| Ok(f.clone()) })));
-        f2.expect(MockFileAction::Write(Box::new(|buf| { assert_eq!(buf, b"4"); Ok(1) })));
+        h.dir.expect(MockDirAction::Create(
+            CompositeId::new(1, 2),
+            Box::new({
+                let f = f2.clone();
+                move |_id| Ok(f.clone())
+            }),
+        ));
+        f2.expect(MockFileAction::Write(Box::new(|buf| {
+            assert_eq!(buf, b"4");
+            Ok(1)
+        })));
         f2.expect(MockFileAction::SyncAll(Box::new(|| Ok(()))));
-        w.write(b"4", recording::Time(31*recording::TIME_UNITS_PER_SEC), 1, true).unwrap();
+        w.write(
+            b"4",
+            recording::Time(31 * recording::TIME_UNITS_PER_SEC),
+            1,
+            true,
+        )
+        .unwrap();
         h.dir.expect(MockDirAction::Sync(Box::new(|| Ok(()))));
 
         drop(w);
@@ -1297,8 +1599,10 @@ mod tests {
         // The syncer should shut down cleanly.
         drop(h.channel);
         h.db.lock().clear_on_flush();
-        assert_eq!(h.syncer_rcv.try_recv().err(),
-                   Some(std::sync::mpsc::TryRecvError::Disconnected));
+        assert_eq!(
+            h.syncer_rcv.try_recv().err(),
+            Some(std::sync::mpsc::TryRecvError::Disconnected)
+        );
         assert!(h.syncer.planned_flushes.is_empty());
     }
 
@@ -1322,9 +1626,13 @@ mod tests {
             assert!(new == 2999 || new == 3000);
             total += new;
         }
-        let expected = 1800*3000 - 540;
-        assert!(total == expected || total == expected + 1, "total={} vs expected={}",
-                total, expected);
+        let expected = 1800 * 3000 - 540;
+        assert!(
+            total == expected || total == expected + 1,
+            "total={} vs expected={}",
+            total,
+            expected
+        );
 
         a = ClockAdjuster::new(Some(540));
         let mut total = 0;
@@ -1333,9 +1641,13 @@ mod tests {
             assert!(new == 3000 || new == 3001);
             total += new;
         }
-        let expected = 1800*3000 + 540;
-        assert!(total == expected || total == expected + 1, "total={} vs expected={}",
-                total, expected);
+        let expected = 1800 * 3000 + 540;
+        assert!(
+            total == expected || total == expected + 1,
+            "total={} vs expected={}",
+            total,
+            expected
+        );
 
         // capped at 500 ppm (change of 2,700/90,000ths over 1 minute).
         a = ClockAdjuster::new(Some(-1_000_000));
@@ -1345,9 +1657,13 @@ mod tests {
             assert!(new == 2998 || new == 2999, "new={}", new);
             total += new;
         }
-        let expected = 1800*3000 - 2700;
-        assert!(total == expected || total == expected + 1, "total={} vs expected={}",
-                total, expected);
+        let expected = 1800 * 3000 - 2700;
+        assert!(
+            total == expected || total == expected + 1,
+            "total={} vs expected={}",
+            total,
+            expected
+        );
 
         a = ClockAdjuster::new(Some(1_000_000));
         total = 0;
@@ -1356,8 +1672,12 @@ mod tests {
             assert!(new == 3001 || new == 3002, "new={}", new);
             total += new;
         }
-        let expected = 1800*3000 + 2700;
-        assert!(total == expected || total == expected + 1, "total={} vs expected={}",
-                total, expected);
+        let expected = 1800 * 3000 + 2700;
+        assert!(
+            total == expected || total == expected + 1,
+            "total={} vs expected={}",
+            total,
+            expected
+        );
     }
 }
